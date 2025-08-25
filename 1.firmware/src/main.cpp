@@ -2,6 +2,7 @@
 #include "app/light_control.h"
 
 void setup() {
+  Serial.begin(115200);
   light_control_init();
 }
 
