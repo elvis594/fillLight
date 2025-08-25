@@ -1,0 +1,21 @@
+# PlatformIO
+.pio/
+.vscode/
+.history
+
+# Built files
+*.o
+*.a
+*.so
+*.so.*
+*.dll
+*.exe
+*.pyc
+*.pyo
+*.pyd
+
+# Other
+*.log
+*.DS_Store
+*~
+*.swp
