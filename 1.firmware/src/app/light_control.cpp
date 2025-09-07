@@ -15,9 +15,11 @@ const float MIRED_COOL = 1000000.0f / COOL_WHITE_K;
 const float MIRED_WARM = 1000000.0f / WARM_WHITE_K;
 
 // Module-level state variables
-static bool uv_on = false;
+// static bool uv_on = false; // 屏蔽UV控制
 static uint16_t color_temp_raw = 0;
 static uint16_t brightness_raw = 0;
+static bool uv_active = false; // 按下按键4时开启UV并关闭其他两路
+static unsigned long last_debug_ms = 0; // 调试打印节流
 
 // Forward declarations for local functions
 static void handle_input();
@@ -36,38 +38,60 @@ void light_control_init() {
 void light_control_update() {
     handle_input();
     update_leds();
+
+    // 周期性打印：按钮状态 + IO2 NTC温度 + 当前PWM值
+    if (millis() - last_debug_ms >= 300) {
+        float temperature = read_temperature(); // IO2 NTC温度
+        uint16_t brightness_pwm = map(brightness_raw, 0, 4095, 0, PWM_MAX);
+        if (uv_active) {
+            Serial.printf("BTN4=%s | NTC(IO2)=%.2fC | UV=%u (Brightness) | WW=0 | CW=0\n",
+                          uv_active ? "PRESSED" : "RELEASED", temperature, brightness_pwm);
+        } else {
+            // 计算两路占比（线性混色：color_temp_raw 越大，冷白占比越大）
+            float t = color_temp_raw / 4095.0f; // 0..1
+            float warm_ratio = 1.0f - t;
+            float cool_ratio = t;
+            uint16_t warm_white_val = (uint16_t)roundf(brightness_pwm * warm_ratio);
+            uint16_t cool_white_val = (uint16_t)roundf(brightness_pwm * cool_ratio);
+            Serial.printf("BTN4=%s | NTC(IO2)=%.2fC | WW=%u | CW=%u (Bright=%u, CT_raw=%u)\n",
+                          uv_active ? "PRESSED" : "RELEASED", temperature,
+                          warm_white_val, cool_white_val, brightness_raw, color_temp_raw);
+        }
+        last_debug_ms = millis();
+    }
+
     check_temperature();
 }
 
 static void handle_input() {
-    color_temp_raw = read_pot1();
-    brightness_raw = read_pot2();
-    if (is_uv_button_pressed()) {
-        uv_on = !uv_on;
-    }
+    color_temp_raw = read_pot1();  // POT1: 色温/混色（0..4095）
+    brightness_raw = read_pot2();  // POT2: 亮度（0..4095）
+    // 按下按键4：进入UV模式（UV亮度=当前两路LED的亮度），其他两路关
+    uv_active = is_uv_button_pressed();
 }
 
 static void update_leds() {
-    uint8_t brightness = map(brightness_raw, 0, 4095, 0, 255);
+    // 统一计算亮度PWM值
+    uint16_t brightness_pwm = map(brightness_raw, 0, 4095, 0, PWM_MAX);
 
-    if (uv_on) {
+    if (uv_active) {
         set_warm_white(0);
         set_cool_white(0);
-        set_uv_led(brightness);
-    } else {
-        float mired_target = map_float(color_temp_raw, 0, 4095, MIRED_WARM, MIRED_COOL);
-        float cool_ratio = (mired_target - MIRED_WARM) / (MIRED_COOL - MIRED_WARM);
-
-        if (cool_ratio < 0.0f) cool_ratio = 0.0f;
-        if (cool_ratio > 1.0f) cool_ratio = 1.0f;
-
-        uint8_t warm_white_val = brightness * (1.0f - cool_ratio);
-        uint8_t cool_white_val = brightness * cool_ratio;
-
-        set_warm_white(warm_white_val);
-        set_cool_white(cool_white_val);
-        set_uv_led(0);
+        set_uv_led((uint8_t)brightness_pwm); // UV 亮度=两路LED当前亮度（Brightness旋钮）
+        return;
     }
+
+    // 未进入UV模式：按亮度与色温混色输出两路白光
+    float t = color_temp_raw / 4095.0f; // 0..1，越大越偏冷白
+    float warm_ratio = 1.0f - t;
+    float cool_ratio = t;
+
+    uint16_t warm_white_val = (uint16_t)roundf(brightness_pwm * warm_ratio);
+    uint16_t cool_white_val = (uint16_t)roundf(brightness_pwm * cool_ratio);
+
+    set_warm_white((uint8_t)warm_white_val);
+    set_cool_white((uint8_t)cool_white_val);
+    set_uv_led(0); // UV保持关闭
 }
 
 static void check_temperature() {

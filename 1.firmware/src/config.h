@@ -20,7 +20,8 @@
 #define MAX_TEMP_C 80.0f              // Maximum temperature in Celsius before printing a warning
 
 // PWM Configuration
-#define PWM_FREQ 60000
+#define PWM_FREQ 100000
 #define PWM_RESOLUTION 8
+#define PWM_MAX ((1U << PWM_RESOLUTION) - 1)
 
 #endif // CONFIG_H
