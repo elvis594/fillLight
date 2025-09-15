@@ -6,6 +6,10 @@
 #include "../config.h"
 #include <math.h>
 
+#ifdef USE_ENCODER_VERSION
+#include "../drivers/encoder_driver.h"
+#endif
+
 // Define the color temperatures of the LEDs in Kelvin
 #define COOL_WHITE_K 13000.0f
 #define WARM_WHITE_K 2700.0f
@@ -16,10 +20,14 @@ const float MIRED_WARM = 1000000.0f / WARM_WHITE_K;
 
 // Module-level state variables
 // static bool uv_on = false; // 屏蔽UV控制
-static uint16_t color_temp_raw = 0;
-static uint16_t brightness_raw = 0;
+static uint16_t color_temp_raw = 500;
+static uint16_t brightness_raw = 500;
 static bool uv_active = false; // 按下按键4时开启UV并关闭其他两路
 static unsigned long last_debug_ms = 0; // 调试打印节流
+
+#ifdef USE_ENCODER_VERSION
+static const int ENC_STEP = ENCODER_STEP; // 每个编码器脉冲对应的原始步进
+#endif
 
 // Forward declarations for local functions
 static void handle_input();
@@ -32,16 +40,20 @@ void light_control_init() {
     led_init();
     adc_init();
     button_init();
-    thermistor_init();
+#ifdef USE_ENCODER_VERSION
+    encoder_init();
+#endif
+    // thermistor_init();
 }
 
 void light_control_update() {
     handle_input();
     update_leds();
-
-    // 周期性打印：按钮状态 + IO2 NTC温度 + 当前PWM值
+    // 周期性打印：按钮状态 + NTC温度 + 当前PWM值
     if (millis() - last_debug_ms >= 300) {
-        float temperature = read_temperature(); // IO2 NTC温度
+        // float temperature = read_temperature(); // NTC温度
+        float temperature = 0.0f; // NTC温度
+
         uint16_t brightness_pwm = map(brightness_raw, 0, 4095, 0, PWM_MAX);
         if (uv_active) {
             Serial.printf("BTN4=%s | NTC(IO2)=%.2fC | UV=%u (Brightness) | WW=0 | CW=0\n",
@@ -59,15 +71,34 @@ void light_control_update() {
         }
         last_debug_ms = millis();
     }
-
-    check_temperature();
+    // check_temperature();
 }
 
 static void handle_input() {
+    button_update();
+
+#ifdef USE_ENCODER_VERSION
+    // 使用编码器：增量调节亮度与色温，支持编码器按键或BTN4进入UV
+    encoder_update();
+    int16_t dB = encoder_get_brightness_delta();
+    int16_t dC = encoder_get_cct_delta();
+    if (dB != 0) {
+        int32_t v = (int32_t)brightness_raw + (int32_t)dB * ENC_STEP;
+        if (v < 0) v = 0; if (v > 4095) v = 4095;
+        brightness_raw = (uint16_t)v;
+    }
+    if (dC != 0) {
+        int32_t v = (int32_t)color_temp_raw + (int32_t)dC * ENC_STEP;
+        if (v < 0) v = 0; if (v > 4095) v = 4095;
+        color_temp_raw = (uint16_t)v;
+    }
+    uv_active = is_uv_button_pressed();
+#else
     color_temp_raw = read_pot1();  // POT1: 色温/混色（0..4095）
     brightness_raw = read_pot2();  // POT2: 亮度（0..4095）
     // 按下按键4：进入UV模式（UV亮度=当前两路LED的亮度），其他两路关
     uv_active = is_uv_button_pressed();
+#endif
 }
 
 static void update_leds() {
@@ -77,7 +108,7 @@ static void update_leds() {
     if (uv_active) {
         set_warm_white(0);
         set_cool_white(0);
-        set_uv_led((uint8_t)brightness_pwm); // UV 亮度=两路LED当前亮度（Brightness旋钮）
+        set_uv_led((uint8_t)brightness_pwm); // UV 亮度=两路LED当前亮度（Brightness旋钮/编码器）
         return;
     }
 

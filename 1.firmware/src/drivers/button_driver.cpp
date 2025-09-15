@@ -1,52 +1,37 @@
 #include "button_driver.h"
 #include "../config.h"
 #include <Arduino.h>
+#include <OneButton.h>
 
-// 使用中断方式检测按键状态（IO4，默认上拉，按下接地）
-static volatile bool s_btn_pressed = false;     // 当前按下状态（去抖后）
-static volatile uint32_t s_last_change_us = 0;  // 上次有效电平变化时间戳（us）
-static volatile int s_idle_level = HIGH;        // 空闲电平，初始化时采样，用于兼容外部接法
+// 使用 OneButton 库来处理按键（IO4，默认上拉，按下接地，低电平有效）
+static OneButton s_btn(UV_BUTTON_PIN, true, true); // 引脚，activeLow，pullupActive
+static bool current_state = false;
+static unsigned long last_debug_time = 0;
+static bool init_done = false;
 
-static void IRAM_ATTR uv_button_isr() {
-    uint32_t now = micros();
-    // 简单去抖：10ms 窗口内忽略抖动
-    if (now - s_last_change_us < 10000) {
-        return;
-    }
-    // 读取当前电平，与空闲电平不同则认为按下
-    int level = digitalRead(UV_BUTTON_PIN);
-    s_btn_pressed = (level != s_idle_level);
-    s_last_change_us = now;
+void onClick()
+{
+    current_state = !current_state;
+    Serial.println("*** BUTTON CLICKED! State changed to: " + String(current_state ? "ON" : "OFF") + " ***");
 }
 
 void button_init() {
-    // 先尝试内部上拉
-    pinMode(UV_BUTTON_PIN, INPUT_PULLUP);
-    delay(5);
-    int level_after_pullup = digitalRead(UV_BUTTON_PIN);
-
-    // 如果上拉后仍为LOW，推测外部为下拉接法/按钮接VCC，切换为下拉
-    bool using_pulldown = false;
-    if (level_after_pullup == LOW) {
-        pinMode(UV_BUTTON_PIN, INPUT_PULLDOWN);
-        delay(5);
-        using_pulldown = true;
-    }
-
-    // 采样空闲电平
-    s_idle_level = digitalRead(UV_BUTTON_PIN);
-    // 让首次有效边沿不过滤
-    s_last_change_us = micros() - 50000;
-    // 监听电平变化（按下与释放），在ISR中更新当前状态
-    attachInterrupt(digitalPinToInterrupt(UV_BUTTON_PIN), uv_button_isr, CHANGE);
-
-    // 调试输出当前配置
-    Serial.printf("BTN4 init: pin=%d, mode=%s, idle=%s\n", UV_BUTTON_PIN,
-                  using_pulldown ? "INPUT_PULLDOWN" : "INPUT_PULLUP",
-                  s_idle_level == HIGH ? "HIGH" : "LOW");
+    // 设定去抖时间为25ms，适合机械按键
+    s_btn.setDebounceMs(25);
+    // 使用新的API设置单击和长按时间
+    s_btn.setClickMs(300);
+    s_btn.setPressMs(700);
+    s_btn.attachClick(onClick);
+    
+    Serial.println("*** Button driver initialized on pin " + String(UV_BUTTON_PIN) + " ***");
+    init_done = true;
 }
 
 bool is_uv_button_pressed() {
-    // 返回当前按键是否按下（已在ISR中完成基本去抖）
-    return s_btn_pressed;
+    return current_state == true;
+}
+
+void button_update()
+{
+    s_btn.tick();
 }
